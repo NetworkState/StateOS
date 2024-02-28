@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <MSBuildAllProjects Condition="'$(MSBuildVersion)' == '' Or '$(MSBuildVersion)' &lt; '16.0'">$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{9f049fc6-794b-42df-a66a-3a1d0c33429f}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)Http.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Http3.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Net.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)QMSG.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)QPACK.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)QPACKET.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)QPACK_constants.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)QUIC.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)RTSP.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)SDP.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)TLS.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)TLS13.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)WebRTC.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)Http.cpp" />
+  </ItemGroup>
+</Project>

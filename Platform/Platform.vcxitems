@@ -1,0 +1,64 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <MSBuildAllProjects Condition="'$(MSBuildVersion)' == '' Or '$(MSBuildVersion)' &lt; '16.0'">$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{b50647f0-4928-47de-a9fe-290bee954b01}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)AVX3Parser.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)BaseNames.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Crypto.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Dict.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)File.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Memory.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Parser.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)pch.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Scheduler.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Stream.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)System.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Token.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)TPM.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)TpmTypes.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Types.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)X509.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)X509_defs.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)Dict.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ecc.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)JSON.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)NameStrings.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)pch.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Platform.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)sha256.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)x25519.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)X509.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)XML.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <NASM Include="$(MSBuildThisFileDirectory)aesni-x86_64.asm">
+      <FileType>Document</FileType>
+    </NASM>
+    <NASM Include="$(MSBuildThisFileDirectory)ghash-x86_64.asm">
+      <FileType>Document</FileType>
+    </NASM>
+    <NASM Include="$(MSBuildThisFileDirectory)sha512-x86_64.asm">
+      <FileType>Document</FileType>
+    </NASM>
+    <NASM Include="$(MSBuildThisFileDirectory)x25519-x86_64.asm">
+      <FileType>Document</FileType>
+    </NASM>
+    <NASM Include="$(MSBuildThisFileDirectory)x86_64cpuid.asm">
+      <FileType>Document</FileType>
+    </NASM>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34616.47
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StateOS", "StateOS.vcxproj", "{0095DF95-2E05-4289-BB1D-40A14831F404}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Platform", "Platform\Platform.vcxitems", "{B50647F0-4928-47DE-A9FE-290BEE954B01}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Net", "Net\Net.vcxitems", "{9F049FC6-794B-42DF-A66A-3A1D0C33429F}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "State", "State\State.vcxitems", "{0B5C5405-CCEB-4884-94C3-42C73D924FF4}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Media", "Media\Media.vcxitems", "{5164FFD0-3517-41CB-93D0-2B42C15770A8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Debug|x64.ActiveCfg = Debug|x64
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Debug|x64.Build.0 = Debug|x64
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Debug|x86.ActiveCfg = Debug|Win32
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Debug|x86.Build.0 = Debug|Win32
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Release|x64.ActiveCfg = Release|x64
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Release|x64.Build.0 = Release|x64
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Release|x86.ActiveCfg = Release|Win32
+		{0095DF95-2E05-4289-BB1D-40A14831F404}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F217249F-39A9-4211-9B46-692F17044171}
+	EndGlobalSection
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Media\Media.vcxitems*{0095df95-2e05-4289-bb1d-40a14831f404}*SharedItemsImports = 4
+		Net\Net.vcxitems*{0095df95-2e05-4289-bb1d-40a14831f404}*SharedItemsImports = 4
+		Platform\Platform.vcxitems*{0095df95-2e05-4289-bb1d-40a14831f404}*SharedItemsImports = 4
+		State\State.vcxitems*{0095df95-2e05-4289-bb1d-40a14831f404}*SharedItemsImports = 4
+		State\State.vcxitems*{0b5c5405-cceb-4884-94c3-42c73d924ff4}*SharedItemsImports = 9
+		Media\Media.vcxitems*{5164ffd0-3517-41cb-93d0-2b42c15770a8}*SharedItemsImports = 9
+		Net\Net.vcxitems*{9f049fc6-794b-42df-a66a-3a1d0c33429f}*SharedItemsImports = 9
+		Platform\Platform.vcxitems*{b50647f0-4928-47de-a9fe-290bee954b01}*SharedItemsImports = 9
+	EndGlobalSection
+EndGlobal
