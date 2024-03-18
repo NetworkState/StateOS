@@ -99,6 +99,7 @@ struct SYSTEM_SERVICE
         {
             auto csrData = CAsignKey.signKey.buildCSR(true, CA_KEYUSAGE, STATEOS_BRAND, STRINGBUFFER());
             File.WriteFile(AUTH_CA_CSR, csrData);
+            CAsignKey.signKey.close();
         }
     }
 
@@ -115,8 +116,12 @@ struct SYSTEM_SERVICE
         userAgent = CreateName(HTTP_STRING_USER_AGENT);
         serverBrand = CreateName(STATEOS_BRAND);
 
+        auto publicKey = X509_PARTS(TPM.EKCertRSAbytes).getPublicKey(ByteStream(512));
+        ASSERT(publicKey == TPM.EKpublicKeyRSA);
 
         initCAkey();
+
+        TPM.testAttetation(AKsignKey.signHandle);
     }
 };
 

@@ -227,8 +227,6 @@ TOKEN_OPS<SERVICE_STACK>& TokenOps<SERVICE_STACK>() { return ServiceTokens; }
 template <>
 TOKEN_OPS<SESSION_STACK>& TokenOps<SESSION_STACK>() { return SessionTokens; }
 
-THREAD_POOL ThreadPool;
-
 UINT64 QPCfrequency;
 UINT64 TicksAtStartup;
 
@@ -274,12 +272,13 @@ void StartPlatform()
     // runs under system scheduler
     InitDefaults();
     PopulateNames();
-    TestDict();
+    //TestDict();
     InitJson();
     File.Init();
     Crypto.Init();
     ThreadPool.init();
     TPM.init();
+    TPM.test();
 }
 
 void RunSystemService()

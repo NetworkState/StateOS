@@ -373,6 +373,19 @@ struct X509_OPS
         return outStream.toBuffer(startPosition);
     }
 
+    BUFFER ParseRSASignature(BUFFER input, auto&& outStream)
+    {
+        DBGBREAK(); // debug
+        auto startPosition = outStream.mark();
+        auto sequence = ReadASNData(input);
+        ASSERT(sequence.tag == ASN_SEQUENCE);
+
+        auto field = ReadASNData(sequence.data);
+        outStream.writeBytes(field.data);
+
+        return outStream.toBuffer(startPosition);
+    }
+
     static USTRING ParseName(BUFFER rdnData)
     {
         USTRING name;
@@ -553,13 +566,22 @@ struct X509_OPS
             {
                 algorithm = alg.data;
                 auto signatureElement = ReadASNData(topLevel.data);
-                if (alg.data == OID_sha256WithRSAEncryption || alg.data == OID_ecdsa_with_SHA256)
+                if (alg.data == OID_ecdsa_with_SHA256)
                 {
-                    // handle RSA
                     signature = X509.ParseECDSASignature(signatureElement.data, dataStream.commitTo(EC256_BYTES*2), EC256_BYTES);
                     tbsHash = Sha256ComputeHash(dataStream.commitTo(SHA256_HASH_LENGTH), tbsData);
                 }
-                else if (alg.data == OID_sha384WithRSAEncryption || alg.data == OID_ecdsa_with_SHA384)
+                else if (alg.data == OID_sha256WithRSAEncryption)
+                {
+                    signature = X509.ParseRSASignature(signatureElement.data, dataStream);
+                    tbsHash = Sha256ComputeHash(dataStream.commitTo(SHA256_HASH_LENGTH), tbsData);
+                }
+                else if (alg.data == OID_sha384WithRSAEncryption)
+                {
+                    signature = X509.ParseRSASignature(signatureElement.data, dataStream);
+                    tbsHash = Sha384ComputeHash(dataStream.commitTo(SHA384_HASH_LENGTH), tbsData);
+                }
+                else if (alg.data == OID_ecdsa_with_SHA384)
                 {
                     signature = X509.ParseECDSASignature(signatureElement.data, dataStream.commitTo(EC384_BYTES*2), EC384_BYTES);
                     tbsHash = Sha384ComputeHash(dataStream.commitTo(SHA384_HASH_LENGTH), tbsData);
@@ -723,23 +745,32 @@ struct X509_PARTS
     X509_STATUS status; 
     X509_AUTHORITY authority;
 
+    BUFFER certBytes;
+
     bool isValid = false;
-    X509_PARTS(BUFFER certBytes)
+    bool parse()
     {
         if (certBytes)
         {
             if (tbsHash = X509.SplitParts(certBytes, tbsData, signature, algorithm))
             {
-                ASSERT(algorithm == OID_ecdsa_with_SHA256);
                 if (X509.ParseTBS(tbsData, subject, authority, status))
                 {
                     isValid = true;
                 }
             }
         }
+        return isValid;
     }
 
-    BUFFER getPublicKey(BYTESTREAM& dataStream)
+    X509_PARTS(BUFFER certBytes) : certBytes(certBytes)
+    {
+        parse();
+    }
+
+    X509_PARTS() {}
+
+    BUFFER getPublicKey(auto&& dataStream)
     {
         return isValid ? dataStream.writeBytesTo(subject.publicKey) : NULL_BUFFER;
     }
@@ -750,7 +781,7 @@ struct X509_PARTS
 struct X509_KEY
 {
     TPM_HANDLE signHandle = 0;
-    EC256_PUBLICKEY signPublicKey;
+    BUFFER signPublicKey;
 
     BUFFER certBytes;
     
@@ -760,7 +791,11 @@ struct X509_KEY
 
     NTSTATUS create(BUFFER label)
     {
-        signHandle = TPM.createECDSAhandle(NULL_BUFFER, label, signPublicKey);
+        auto&& keyStream = GlobalStack().blobStream.commitTo(EC256_PUBLICKEY_LENGTH);
+
+        signHandle = TPM.createECDSAhandle(NULL_BUFFER, label, std::move(keyStream));
+        signPublicKey = keyStream.toBuffer();
+
         nodeId = TPM.KeyCipher.hash(signPublicKey);
         return signHandle != 0 ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
     }
@@ -768,7 +803,8 @@ struct X509_KEY
     void close()
     {
         signHandle = 0;
-        RtlZeroMemory(signPublicKey, sizeof(signPublicKey));
+        signPublicKey = NULL_BUFFER;
+        //RtlZeroMemory(signPublicKey, sizeof(signPublicKey));
     }
 
     BUFFER signHash(BUFFER inputHash, BYTESTREAM&& signature)
@@ -847,14 +883,10 @@ struct X509_CA
                 caAuthority.keyId = subject.keyId;
                 caAuthority.name = subject.name;
                 isCA = true;
-            }
-            else
-            {
-                signKey.close();
-            }
 
-            knownCAs.append(subject.keyId, subject.publicKey);
-            result = true;
+                knownCAs.append(subject.keyId, subject.publicKey);
+                result = true;
+            }
         }
         return result;
     }

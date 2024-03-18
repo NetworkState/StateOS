@@ -13,6 +13,8 @@ struct STATE_SERVICE
 
 	BLOCK_BUILDER<STATE_SERVICE> blockBuilder;
 
+	DATASTREAM<BLOCK_READER, SESSION_STACK> blockCache;
+
 	struct TICKETING
 	{
 		X509_KEY signKey;
@@ -70,22 +72,24 @@ struct STATE_SERVICE
 		iobufManager.init();
 
 		ticketing.init();
+
+		blockCache.reserve(64);
 	}
 
 	static bool validateTicket(VLBUFFER& ticketData, BUFFER attachmentData)
 	{
 		auto result = false;
-		if (auto bankId = ticketData.read())
+		if (auto bankId = ticketData.readToken())
 		{
 			auto signature = ticketData.readIfCloser(bankId);
 			auto attachmentHash = ticketData.readIfCloser(bankId);
 
-			auto ticketHash = Sha256ComputeHash(ticketData.inputBuffer, attachmentHash.contourBlob);
+			auto ticketHash = Sha256TempHash(ticketData.inputBuffer, attachmentHash.contourBlob);
 
 			result = SystemService().verifySignature(ServiceTokens.getID(bankId.contour), ticketHash, signature.contourBlob);
 			if (result)
 			{
-				auto computedHash = Sha256ComputeHash(attachmentData);
+				auto computedHash = Sha256TempHash(attachmentData);
 				result = computedHash == attachmentHash.contourBlob;
 			}
 		}
@@ -103,8 +107,8 @@ struct STATE_SERVICE
 
 		headerStream.write(parentDynamic, ticketing.serviceId);
 
-		auto&& attachmentHash = Sha256ComputeHash(ticket.attachment);
-		auto ticketHash = Sha256ComputeHash(ticketStream.toBuffer(), attachmentHash);
+		auto&& attachmentHash = Sha256TempHash(ticket.attachment);
+		auto ticketHash = Sha256TempHash(ticketStream.toBuffer(), attachmentHash);
 
 		auto signature = ticketing.signKey.signHash(ticketHash, ByteStream(64));
 		headerStream.write(nodeDynamic, ECDSA_TOKEN, signature);
@@ -198,5 +202,11 @@ struct STATE_SERVICE
 
 		iobufManager.free(oldBuf);
 		return newBuf;
+	}
+
+	void readBlock(TOKEN blockId)
+	{
+		auto&& reader = blockCache.append(blockId);
+		diskVolumes.at(0).readBlock(reader);
 	}
 };

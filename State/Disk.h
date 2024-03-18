@@ -15,6 +15,21 @@ constexpr GUID EMPTY_SECTOR_GUID = { 0xb8281b3b, 0x203f, 0x43b8, 0xb7, 0xa2, 0xb
 template <typename SERVICE = STATE_SERVICE>
 struct DISK_VOLUME
 {
+	struct BLOCK_INDEX
+	{
+		TOKEN blockId;
+		UINT32 sectorIndex;
+		UINT32 sectorCount;
+	};
+
+	struct OFFBLOCK_INDEX
+	{
+		TOKEN objectId;
+		TOKEN timestamp;
+		UINT32 sectorIndex;
+		UINT32 sectorCount;
+	};
+
 	struct VOLUME_STATE
 	{
 		U128 volumeId;
@@ -44,13 +59,60 @@ struct DISK_VOLUME
 	HANDLE volumeHandle;
 	UINT64 volumeSize;
 
+	TOKEN volumeId;
+	UINT32 sectorSize;
+
 	BYTESTREAM stateStream;
 	IOCALLBACK ioState;
 
 	AES_CTR diskCipher;
 	AES_GMAC diskGMAC;
 
+	DATASTREAM<BLOCK_INDEX, SERVICE_STACK> blockMap;
+	DATASTREAM<OFFBLOCK_INDEX, SERVICE_STACK> offblockMap;
+
 	DISK_VOLUME(SERVICE& service) : service(service), ioState(IO_FILE_READ) {}
+
+	bool findBlock(TOKEN blockId, BLOCK_READER& reader)
+	{
+		auto result = false;
+		for (auto blocks = blockMap.toBuffer(); auto && block: blocks)
+		{
+			if (block.blockId == blockId)
+			{
+				reader.diskId = volumeId;
+				reader.sectorIndex = block.sectorIndex;
+				reader.sectorCount = block.sectorCount;
+				result = true;
+				break;
+			}
+		}
+		return result;
+	}
+
+	NTSTATUS readBlock(BLOCK_READER& reader)
+	{
+		auto status = STATUS_UNSUCCESSFUL;
+
+		auto blockOffset = UINT64(reader.sectorIndex) * sectorSize;
+		auto blockSize = reader.sectorCount * sectorSize;
+		
+		reader.dataBuf = &service.allocBuf(blockSize, 0);
+
+		NEW(reader.ioState().task, [](PVOID context, NTSTATUS result, STASK_ARGV argv)
+			{
+				auto&& volume = *(DISK_VOLUME*)context;
+				auto&& block = *argv.read<BLOCK_READER*>(0);
+				auto bytesRead = argv.read<DWORD>(1);
+
+				block.dataStream().setCount(bytesRead);
+				block.parseBlock(block, block.dataStream().toBuffer());
+
+			}, this, &reader);
+
+		status = File.Read(volumeHandle, blockOffset, reader.dataStream(), blockSize, reader.ioState());
+		return status;
+	}
 
 	void formatVolume()
 	{

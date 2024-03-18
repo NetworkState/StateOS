@@ -678,4 +678,4 @@ struct THREAD_POOL
     }
 };
 
-extern THREAD_POOL ThreadPool;
+inline THREAD_POOL ThreadPool;

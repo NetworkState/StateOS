@@ -24,7 +24,7 @@ struct TICKET
 		static bool parse(TK_OBJECT& object, VLBUFFER& inputBuffer)
 		{
 			auto result = false;
-			if (auto token = inputBuffer.read())
+			if (auto token = inputBuffer.readToken())
 			{
 				object.id = token.contour;
 				if (auto childToken = inputBuffer.readIfCloser(token))
@@ -98,7 +98,7 @@ struct TICKET
 	static bool parse(TICKET& ticket, BUFFER ticketData, BUFFER externalData = NULL_BUFFER)
 	{
 		VLBUFFER ticketBuffer{ ticketData };
-		if (ticket.header.ticketId = ticketBuffer.read().contour)
+		if (ticket.header.ticketId = ticketBuffer.readToken().contour)
 		{
 
 		}

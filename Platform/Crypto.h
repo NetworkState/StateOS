@@ -238,7 +238,7 @@ BUFFER Sha256ComputeHash(BYTESTREAM&& outStream, ARGS&& ... args)
 }
 
 VARGS(BUFFER)
-BUFFER Sha256ComputeHash(ARGS&& ... args)
+BUFFER Sha256TempHash(ARGS&& ... args)
 {
     return Sha256ComputeHash(ByteStream(SHA256_HASH_LENGTH), args ...);
 }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+constexpr UINT32 BLOCK_PREAMBLE = 16;
 
 template <typename SERVICE = STATE_SERVICE>
 struct BLOCK_BUILDER
@@ -21,6 +22,12 @@ struct BLOCK_BUILDER
 		void init(UINT32 size = 64 * 1024)
 		{
 			NEW(ioBuf, builder.service.allocBuf(size, 0));
+			ioBuf.dataStream.writeBytes(ZeroBytes, BLOCK_PREAMBLE);
+		}
+
+		void writeLength()
+		{
+			iobuf.dataStream.beWriteAtU32(0, ioBuf.dataStream.length());
 		}
 
 		IOBUF& clone()
@@ -48,6 +55,8 @@ struct BLOCK_BUILDER
 			currentDynamic = dynamic;
 
 			VLToken.write(dataStream(), contour, contourData, label, separation, visibility);
+
+			writeLength();
 		}
 	};
 
@@ -147,3 +156,120 @@ struct BLOCK_BUILDER
 	}
 };
 
+struct OBJECT_HEADER
+{
+	TOKEN id;
+	TOKEN fromtimestamp;
+	TOKEN toTimestamp;
+	TOKEN command;
+	UINT32 dataOffset;
+
+	OBJECT_HEADER(VLTOKEN& idToken) : id(idToken.contour) 
+	{
+		ASSERT(idToken.contour.isObject());
+	}
+};
+
+
+struct OFFBLOCK_OBJECT
+{
+	TOKEN objectId;
+	TOKEN timestamp;
+	TOKEN diskId;
+	UINT32 sectorIndex;
+	UINT32 sectorCount;
+	PIOBUF dataBuf = nullptr;
+};
+
+struct BLOCK_READER
+{
+	TOKEN blockId;
+	TOKEN diskId;
+	UINT32 sectorIndex;
+	UINT32 sectorCount;
+	PIOBUF dataBuf = nullptr;
+
+	DATASTREAM<OBJECT_HEADER, SERVICE_STACK> objects;
+
+	UINT32 age;
+
+	BLOCK_READER(TOKEN blockId) : blockId(blockId)
+	{
+		age = GetUptimeS();
+	}
+
+	auto&& dataStream() { return dataBuf->dataStream; }
+	auto&& ioState() { return dataBuf->ioState; }
+
+	static bool validateBlock(BLOCK_READER& reader, VLBUFFER& blockData, BUFFER diskData)
+	{
+		auto result = false;
+
+		auto headerTokens = blockData.readFragmentTokens();
+
+		auto blockId = headerTokens.read().contour;
+		if (reader.blockId) ASSERT(reader.blockId == blockId);
+
+		BUFFER publicKey;
+		for (auto&& token : headerTokens)
+		{
+			if (token.contour == ECDSA_TOKEN)
+			{
+				publicKey = token.contourBlob;
+				break;
+			}
+		}
+
+		ASSERT(publicKey);
+		if (publicKey)
+		{
+			auto signature = diskData.shrink(ECDSA_SIGN_LENGTH);
+			auto signHash = Sha256TempHash(diskData);
+			result = ecdsa_verify(publicKey, signHash, signature);
+		}
+		return result;
+	}
+
+	static BUFFER shiftPreamble(BUFFER diskBlock)
+	{
+		auto preamble = diskBlock.readBytes(BLOCK_PREAMBLE);
+		auto length = preamble.beReadU32() - BLOCK_PREAMBLE;
+
+		return diskBlock.readBytes(length).rebase();
+	}
+
+	void parseSingleObject(OBJECT_HEADER& object, VLBUFFER& objectData)
+	{
+		auto attributeTokens = objectData.readFragmentTokens();
+		object.fromtimestamp = attributeTokens.read().contour;
+		object.toTimestamp = attributeTokens.read().contour;
+		object.command = attributeTokens.read().contour;
+
+		auto ticketFragment = objectData.readFragment();
+
+		object.dataOffset = objectData.inputBuffer.mark();
+	}
+
+	void parseObjects(VLBUFFER& blockData)
+	{
+		while (auto objectFragment = blockData.readFragment())
+		{
+			auto objectToken = objectFragment.readToken();
+
+			auto&& object = objects.append(objectToken);
+			parseSingleObject(object, objectFragment);
+		}
+	}
+
+	static void parseBlock(BLOCK_READER& reader, BUFFER diskData)
+	{
+		diskData = shiftPreamble(diskData);
+
+		VLBUFFER blockData{ diskData };
+
+		if (validateBlock(reader, blockData, diskData))
+		{
+			reader.parseObjects(blockData);
+		}
+	}
+};

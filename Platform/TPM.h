@@ -10,6 +10,7 @@
 
 #include "Types.h"
 #include <tbs.h>
+#include <wbcl.h>
 #include "TpmTypes.h"
 
 constexpr UINT32 EC256_PUBLICKEY_LENGTH = 64;
@@ -63,19 +64,20 @@ struct TPMOPS
             ECDHhandle = TPM.createECDHhandle(NULL_BUFFER, WriteMany(STATEOS_BRAND, " - ECDH"), ECDHpublicKey);
             deriveKey(ECDHhandle, "keygen", KeyCipher);
 
-            undefineNV(TPM_COUNTER_TICKET); // XXX for testing
-            undefineNV(TPM_COUNTER_BLOCK_ID);
-            undefineNV(TPM_COUNTER_NODE_ID);
-            undefineNV(TPM_COUNTER_ROLE_ID);
             auto existingIndexes = getHandles(TPM2_HR_NV_INDEX);
             defineCounter(TPM_COUNTER_TICKET, existingIndexes);
             defineCounter(TPM_COUNTER_BLOCK_ID, existingIndexes);
             defineCounter(TPM_COUNTER_NODE_ID, existingIndexes);
             defineCounter(TPM_COUNTER_ROLE_ID, existingIndexes);
 
+            getCertificate();
+
+            EKauthSession = getEndorsementAuth();
+            if (EKauthSession == TPM2_RH_NULL) break;
+
             result = true;;
         } while (false);
-        ASSERT(result);
+        //ASSERT(result);
         return result;
     }
 
@@ -143,6 +145,7 @@ struct TPMOPS
                 request.beWriteU32(TPM2_RH_OWNER);
                 TPM.writeTPM2B(request, NULL_BUFFER);
             }, keyHandle, signHash);
+        ASSERT(response);
         if (response)
         {
             response = getSessionResponse(response);
@@ -227,17 +230,37 @@ struct TPMOPS
         return response;
     }
 
-    void setPassword(BYTESTREAM& request, BUFFER password)
+    void setAuth(BYTESTREAM& request, TPM_HANDLE handle1, TPM_HANDLE handle2)
+    {
+        auto offset = request.saveOffset(4);
+        //TPMS_AUTH_COMMAND
+        request.beWriteU32(handle1);
+        request.beWriteU16(0); // nonce
+        request.writeByte(1); // attr
+        request.beWriteU16(0);
+
+        //TPMS_AUTH_COMMAND
+        request.beWriteU32(handle2);
+        request.beWriteU16(0); // nonce
+        request.writeByte(1); // attr
+        request.beWriteU16(0);
+
+        offset.writeLength(0);
+    }
+
+    void setPassword(BYTESTREAM& request, BUFFER password, UINT32 handleCount = 1)
     {
         auto offset = request.saveOffset(4);
 
-        //TPMS_AUTH_COMMAND
-        request.beWriteU32(TPM2_RH_PW);
-        request.beWriteU16(0); // nonce
-        request.writeByte(1); // attr
-        request.beWriteU16(password.length());
-        request.writeBytes(password);
-
+        for (UINT32 i = 0; i < handleCount; i++)
+        {
+            //TPMS_AUTH_COMMAND
+            request.beWriteU32(TPM2_RH_PW);
+            request.beWriteU16(0); // nonce
+            request.writeByte(1); // attr
+            request.beWriteU16(password.length());
+            request.writeBytes(password);
+        }
         offset.writeLength(0);
     }
 
@@ -352,8 +375,6 @@ struct TPMOPS
 
         // TPMS_ECC_PARMS
         request.beWriteU16(TPM2_ALG_NULL); 
-        //request.beWriteU16(0);
-        //request.beWriteU16(TPM2_ALG_NULL);
         request.beWriteU16(TPM2_ALG_ECDSA);
         request.beWriteU16(TPM2_ALG_SHA256);
         request.beWriteU16(TPM2_ECC_NIST_P256);
@@ -382,8 +403,6 @@ struct TPMOPS
 
         // TPMS_ECC_PARMS
         request.beWriteU16(TPM2_ALG_NULL);
-        //request.beWriteU16(128);
-        //request.beWriteU16(TPM2_ALG_CFB);
         request.beWriteU16(TPM2_ALG_NULL);
         request.beWriteU16(TPM2_ECC_NIST_P256);
         request.beWriteU16(TPM2_ALG_NULL);
@@ -446,7 +465,6 @@ struct TPMOPS
     BUFFER parsePublicData(BUFFER data, BYTESTREAM&& keyStream)
     {
         auto type = data.beReadU16();
-        //ASSERT(type == TPM2_ALG_ECC);
 
         auto nameAlg = data.beReadU16();
 
@@ -558,7 +576,7 @@ struct TPMOPS
         UINT32 handle = 0;
         auto response = submitCommand(TPM2_CC_CreatePrimary, TPM2_ST_SESSIONS, [](BYTESTREAM& request)
             {
-                request.beWriteU32(TPM2_RH_ENDORSEMENT);
+                request.beWriteU32(TPM2_RH_OWNER);
                 TPM.setPassword(request, NULL_BUFFER);
 
                 auto authOffset = request.saveOffset(2);
@@ -736,7 +754,6 @@ struct TPMOPS
 
     constexpr static UINT32 SIGN_RSA_HANDLE = 0x81000002;
     constexpr static UINT32 ENCRYPT_RSA_HANDLE = 0x81010001;
-    //constexpr static UINT32 ENCRYPT_RSA_HANDLE = 0x81000001;
     constexpr static UINT32 ENCRYPT_ECC_HANDLE = 0x81000009;
 
     BUFFER getQuote(TPM_HANDLE signHandle)
@@ -770,47 +787,131 @@ struct TPMOPS
             pcrDigest = parseAttest(attestData);
 
             //TPMT_SIGNATURE
+            auto&& signature = ByteStream(512);
             auto sigAlg = response.beReadU16();
-            ASSERT(sigAlg == TPM2_ALG_ECDSA);
-
             auto sigHash = response.beReadU16();
-            ASSERT(sigHash == TPM2_ALG_SHA256);
+            if (sigAlg == TPM2_ALG_RSASSA)
+            {
+                signature.writeBytes(readTPM2B(response));
+            }
+            else if (sigAlg == TPM2_ALG_ECDSA)
+            {
+                signature.writeBytes(readTPM2B(response));
+                signature.writeBytes(readTPM2B(response));
 
-            auto&& signature = ByteStream(ECDSA_SIGN_LENGTH);
-            signature.writeBytes(readTPM2B(response));
-            signature.writeBytes(readTPM2B(response));
-
+                SHA256_DATA digestHash;
+                Sha256ComputeHash(digestHash, attestData);
+                //auto result = ecdsa_verify(TPM.AKpublicKey, digestHash, signature.toBuffer());
+                //ASSERT(result);
+            }
+            else DBGBREAK();
             ASSERT(response.length() == 0);
-
-            SHA256_DATA digestHash;
-            Sha256ComputeHash(digestHash, attestData);
-            //auto result = ecdsa_verify(TPM.AKpublicKey, digestHash, signature.toBuffer());
-            //ASSERT(result);
         }
         return pcrDigest;
     }
-    /* persistent handles
+/* persistent handles
 handle: 0x81000001 => RSA encrypt
 handle: 0x81000002 => RSA signing keyd
 handle: 0x81000009
 handle: 0x81010001 => Endorsement, RSA encrypt
-    */
-
-    void getHandleInfo(UINT32 handle, BYTESTREAM&& publicKey)
+*/
+    BUFFER readPublic(TPM_HANDLE handle, auto&& name)
     {
+        BUFFER publicData;
         auto response = submitCommand(TPM2_CC_ReadPublic, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request, UINT32 handle)
             {
                 request.beWriteU32(handle);
             }, handle);
         if (response)
         {
-            auto publicData = readTPM2B(response);
-            parsePublicData(publicData, std::move(publicKey));
-            auto name = readTPM2B(response);
-
-            auto qualifiedName = readTPM2B(response);
-
+            publicData = readTPM2B(response);
+            name = readTPM2B(response);
         }
+        else DBGBREAK();
+        return publicData;
+    }
+    
+    bool activateCredential(TPM_HANDLE aikHandle, BUFFER digest, BUFFER cipherSecret, BUFFER& plainSecret)
+    {
+        auto result = false;
+        auto response = submitCommand(TPM2_CC_ActivateCredential, TPM2_ST_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE aikHandle, BUFFER digest, BUFFER secret)
+            {
+                request.beWriteU32(aikHandle);
+                request.beWriteU32(ENCRYPT_RSA_HANDLE);
+                TPM.setAuth(request, TPM2_RH_PW, TPM.EKauthSession);
+
+                TPM.writeTPM2B(request, digest);
+                TPM.writeTPM2B(request, secret);
+            }, aikHandle, digest, cipherSecret);
+        if (response)
+        {
+            response = getSessionResponse(response);
+            plainSecret = readTPM2B(response);
+            ASSERT(response.length() == 0);
+            result = true;
+        }
+        return result;
+    }
+
+    bool makeCredential(BUFFER ekPUblicData, BUFFER aikName, BUFFER plainSecret, BUFFER& credential, BUFFER& cipherSecret)
+    {
+        auto result = false;
+        do
+        {
+            TPM_HANDLE ekHandle;
+            auto response = submitCommand(TPM2_CC_LoadExternal, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request, BUFFER publicData)
+                {
+                    request.beWriteU16(0);
+                    TPM.writeTPM2B(request, publicData);
+                    request.beWriteU32(TPM2_RH_OWNER);
+                }, ekPUblicData);
+            if (response)
+            {
+                ekHandle = response.beReadU32();
+            }
+            else break;
+
+            response = submitCommand(TPM2_CC_MakeCredential, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE ekHandle, BUFFER aikName, BUFFER secret)
+                {
+                    request.beWriteU32(ekHandle);
+                    TPM.writeTPM2B(request, secret);
+                    TPM.writeTPM2B(request, aikName);
+                }, ekHandle, aikName, plainSecret);
+            if (response)
+            {
+                credential = readTPM2B(response);
+                cipherSecret = readTPM2B(response);
+
+                ASSERT(response.length() == 0);
+            }
+            else break;
+        } while (false);
+        return result;
+    }
+
+    void testAttetation(TPM_HANDLE aikHandle)
+    {
+        ASSERT(aikHandle);
+        getHandleInfo(ENCRYPT_RSA_HANDLE, std::move(rsaSignPublicKey.byteStream()));
+        auto publicData = readPublic(ENCRYPT_RSA_HANDLE, BUFFER());
+        auto plainSecret = WriteMany("test secret data");
+
+        BUFFER aikName;
+        readPublic(aikHandle, aikName);
+
+        BUFFER cipherSecret, credential;
+        auto valid = makeCredential(publicData, aikName, plainSecret, credential, cipherSecret);
+        ASSERT(valid);
+
+        BUFFER testSecret;
+        valid = activateCredential(aikHandle, credential, cipherSecret, testSecret);
+        ASSERT(valid);
+    }
+
+    void getHandleInfo(UINT32 handle, BYTESTREAM&& publicKey)
+    {
+        auto publicData = readPublic(handle, BUFFER());
+        parsePublicData(publicData, std::move(publicKey));
     }
 
     bool isNVIndex(TPM2_HANDLE handle)
@@ -942,33 +1043,183 @@ handle: 0x81010001 => Endorsement, RSA encrypt
         }
         return dataSize;
     }
+/*
+    typedef struct {
+        TCG_PCRINDEX PCRIndex;
+        TCG_EVENTTYPE EventType;
+        TPML_DIGEST_VALUES Digests;
+        UINT32 EventSize;
+        UINT8 Event[EventSize];
+    } TCG_PCR_EVENT2;
+
+    typedef struct {
+        UINT32 Count;
+        TPMT_HA Digests;
+    } TPML_DIGEST_VALUES;
+
+    typedef struct {
+        UINT16 HashAlg;
+        UINT8 Digest[size_varies_with_algorithm];
+    } TPMT_HA;
+
+    typedef struct {
+        BYTE[16] Signature;
+        UINT32 PlatformClass;
+        UINT8 SpecVersionMinor;
+        UINT8 SpecVersionMajor;
+        UINT8 SpecErrata;
+        UINT8 UintNSize;
+        UINT32 NumberOfAlgorithms;
+        TCG_EfiSpecIdEventAlgorithmSize DigestSizes[NumberOfAlgorithms];
+        UINT8 VendorInfoSize;
+        UINT8 VendorInfo[VendorInfoSize];
+    } TCG_EfiSpecIdEventStruct;
+
+    typedef struct {
+        UINT16 HashAlg;
+        UINT16 DigestSize;
+    } TCG_EfiSpecIdEventAlgorithmSize;
+
+    typedef struct {
+        TCG_PCRINDEX PCRIndex;
+        TCG_EVENTTYPE EventType;
+        TCG_DIGEST Digest;
+        UINT32 EventSize;
+        UINT8 Event[EventSize];
+    } TCG_PCR_EVENT;
+*/
+#define EV_PREBOOT_CERT            0x0
+#define EV_POST_CODE               0x1
+#define EV_UNUSED                  0x2
+#define EV_NO_ACTION               0x3
+#define EV_SEPARATOR               0x4
+#define EV_ACTION                  0x5
+#define EV_EVENT_TAG               0x6
+#define EV_S_CRTM_CONTENTS         0x7
+#define EV_S_CRTM_VERSION          0x8
+#define EV_CPU_MICROCODE           0x9
+#define EV_PLATFORM_CONFIG_FLAGS   0xa
+#define EV_TABLE_OF_DEVICES        0xb
+#define EV_COMPACT_HASH            0xc
+#define EV_IPL                     0xd
+#define EV_IPL_PARTITION_DATA      0xe
+#define EV_NONHOST_CODE            0xf
+#define EV_NONHOST_CONFIG          0x10
+#define EV_NONHOST_INFO            0x11
+#define EV_OMIT_BOOT_DEVICE_EVENTS 0x12
+
+    void parseTCGLog(BUFFER log)
+    {
+        auto pcr = log.readU32();
+        auto type = log.readU32();
+        auto digest = log.readBytes(20);
+        auto eventSize = log.readU32();
+        auto header = log.readBytes(eventSize);
+
+        auto signature = header.readBytes(16);
+
+        BUFFER eventData;
+        while (log)
+        {
+            auto pcr = log.readU32();
+            auto eventType = log.readU32();
+
+            auto digestCount = log.readU32();
+            for (UINT32 i = 0; i < digestCount; i++)
+            {
+                auto alg = log.readU16();
+                BUFFER hash;
+                if (alg == TPM2_ALG_SHA256)
+                {
+                    hash = log.readBytes(SHA256_HASH_LENGTH);
+                }
+                else if (alg == TPM2_ALG_SHA1)
+                {
+                    hash = log.readBytes(SHA1_HASH_LENGTH);
+                }
+                else DBGBREAK();
+            }
+            eventSize = log.readU32();
+            eventData = log.readBytes(eventSize);
+        }
+    }
+
+    void readTCGLog()
+    {
+        auto&& tcgData = ByteStream(256 * 1024);
+        auto result = Tbsi_Get_TCG_Log_Ex(TBS_TCGLOG_SRTM_CURRENT, tcgData.commit(tcgData.size()), &tcgData.setCount());
+        if (result == TBS_SUCCESS)
+        {
+            parseTCGLog(tcgData.toBuffer());
+        }
+
+    }
 
     constexpr static UINT32 ECC_EKCERT_NVINDEX = 0x01C0000A;
     constexpr static UINT32 RSA_EKCERT_NVINDEX =      0x01C00002;
     constexpr static UINT32 EK_TEMPLATE_NVINDEX = 0x01c0000c;
     constexpr static UINT32 EK_NONCE_NVINDEX =    0x01c0000b;
 
-    //LOCAL_STREAM<512> certPublicKey;
-    //void getCertificate()
-    //{
-    //    auto certData = readNVIndex(ECC_EKCERT_NVINDEX);
-    //    CERTIFICATE certificate(ByteStream(1024));
-    //    X509.ParseX509(certData, certificate);
-    //    certPublicKey.writeBytes(certificate.publicKey);
-    //}
+    LOCAL_STREAM<512> certPublicKey;
 
-    void getEK()
+    BUFFER EKCertECCbytes;
+    BUFFER EKCertRSAbytes;
+
+    BUFFER EKpublicKeyRSA;
+
+    void getCertificate()
     {
-        auto keyTemplate = readNVIndex(EK_TEMPLATE_NVINDEX);
-        auto keyNonce = readNVIndex(EK_NONCE_NVINDEX);
+        auto certData = readNVIndex(ECC_EKCERT_NVINDEX);
+        EKCertECCbytes = GlobalStack().blobStream.writeBytesTo(certData);
 
-        UINT8 keyData[64];
-        parsePublicData(keyTemplate, keyData);
+        certData = readNVIndex(RSA_EKCERT_NVINDEX);
+        EKCertRSAbytes = GlobalStack().blobStream.writeBytesTo(certData);
 
-        submitCommand(TPM2_CC_CreatePrimary, TPM2_ST_SESSIONS, [](BYTESTREAM& request)
+        auto publicData = readPublic(ENCRYPT_RSA_HANDLE, BUFFER());
+        auto publicKey = parsePublicData(publicData, ByteStream(512));
+
+        EKpublicKeyRSA = GlobalStack().blobStream.writeBytesTo(publicKey).rebase();
+    }
+
+    TPM_HANDLE EKauthSession;
+    TPM_HANDLE getEndorsementAuth()
+    {
+        TPM_HANDLE sessionHandle = TPM2_RH_NULL;
+
+        auto response = submitCommand(TPM2_CC_StartAuthSession, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request)
             {
+                request.beWriteU32(TPM2_RH_NULL);
+                request.beWriteU32(TPM2_RH_NULL);
 
+                TPM.writeTPM2B(request, ZeroBytes.toBuffer(16));
+
+                request.beWriteU16(0);
+                request.writeByte(TPM2_SE_POLICY);
+                request.beWriteU16(TPM2_ALG_NULL);
+                request.beWriteU16(TPM2_ALG_SHA256);
             });
+        if (response)
+        {
+            sessionHandle = response.beReadU32();
+        }
+        ASSERT(sessionHandle != TPM2_RH_NULL);
+
+        response = submitCommand(TPM2_CC_PolicySecret, TPM2_ST_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE sessionHandle)
+            {
+                request.beWriteU32(TPM2_RH_ENDORSEMENT);
+                request.beWriteU32(sessionHandle);
+
+                TPM.setPassword(request, NULL_BUFFER);
+
+                request.beWriteU16(0);
+                request.beWriteU16(0);
+                request.beWriteU16(0);
+                request.beWriteU32(0);
+
+            }, sessionHandle);
+        ASSERT(response);
+        sessionHandle = response ? sessionHandle : TPM2_RH_NULL;
+        return sessionHandle;
     }
 
     LOCAL_STREAM<512> rsaSignPublicKey;
@@ -979,16 +1230,21 @@ handle: 0x81010001 => Endorsement, RSA encrypt
         //defineNVSpace(0x01c00004, NULL_BUFFER);
         //readNVpublic(0x01c0000A);
         //undefineNV(0x01c00004);
-        //auto found1 = getHandles(TPM2_HR_PERSISTENT, RSA_EKCERT_NVINDEX);
+        //openEKhandleEC();
+        //getEndorsementAuth();
+        auto found1 = getHandles(TPM2_HR_PERSISTENT, -1); // RSA_EKCERT_NVINDEX);
         //auto found2 = getHandles(TPM2_HR_NV_INDEX, EKCERT_NVINDEX);
         //auto found2 = getHandles(EK_TEMPLATE_NVINDEX);
         //auto found3 = getHandles(EK_NONCE_NVINDEX);
         //getEK();
     
+        //readTCGLog();
+
         AES_GCM cipher;
         getHandleInfo(ENCRYPT_RSA_HANDLE, std::move(rsaSignPublicKey.byteStream()));
         //getCertificate();
         //EKhandleEC = openEKhandleEC();
+        getQuote(SIGN_RSA_HANDLE);
         //getQuote();
         //getDeviceInfo();
         UINT8 pcrDigest[SHA256_HASH_LENGTH];

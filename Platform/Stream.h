@@ -1619,9 +1619,9 @@ inline BUFFER WriteMany(ARGS&& ... args)
 template <typename T, typename STACK, UINT32 INIT=8, UINT32 INCR=8>
 struct DATASTREAM
 {
-	T* _data;
+	T* _data = nullptr;
 	UINT32 _tail = 0;
-	UINT32 _size;
+	UINT32 _size = 0;
 
 	template <UINT32 SZ>
 	DATASTREAM(T(&data)[SZ])
@@ -1630,7 +1630,7 @@ struct DATASTREAM
 		_size = SZ;
 	}
 
-	DATASTREAM() { ASSERT((bool(_data) ^ bool(_size)) == false); }  // construct or reset
+	DATASTREAM() : _tail(0) { ASSERT((bool(_data) ^ bool(_size)) == false); }  // construct or reset
 	DATASTREAM(T* addr, UINT32 size) : _data(addr), _size(size) {}
 	DATASTREAM(DATASTREAM& other) = delete;
 

@@ -126,6 +126,7 @@ inline UINT64 GetTicks()
 extern UINT64 TicksAtStartup;
 
 inline UINT64 GetUptimeUS() { return (GetTicks() - TicksAtStartup) / 10; }
+inline UINT32 GetUptimeS() { return UINT32(GetUptimeUS() / TICKS_PER_SECOND); }
 
 inline UINT64 GetTime()
 {
@@ -1096,7 +1097,7 @@ struct VLBUFFER
 
     VISUAL_DYANMIC dynamic;
 
-    VLTOKEN read()
+    VLTOKEN readToken()
     {
         auto token = VLToken.parse(inputBuffer);
         if (token.separation == VS_REPEAT)
@@ -1112,18 +1113,18 @@ struct VLBUFFER
         return token;
     }
 
-    VLTOKEN parse()
+    VLTOKEN peekToken()
     {
-        return VLToken.parse(inputBuffer);
+        return VLToken.peek(inputBuffer);
     }
 
     VLTOKEN readIf(TOKENTYPE type)
     {
         auto result = VLTOKEN();
         
-        if (auto token = parse(); token && token.contour.getType() == type)
+        if (auto token = peekToken(); token && token.contour.getType() == type)
         {
-            result = read();
+            result = readToken();
         }
         return result;
     }
@@ -1131,12 +1132,44 @@ struct VLBUFFER
     VLTOKEN readIfCloser(const VLTOKEN& first)
     {
         auto result = VLTOKEN();
-        if (auto token = parse(); token && token.isCloser(first))
+        if (auto token = peekToken(); token && token.isCloser(first))
         {
-            result = read();
+            result = readToken();
         }
         return result;
     }
+
+    auto readFragmentTokens()
+    {
+        DATASTREAM<VLTOKEN, SCHEDULER_STACK> tokenStream;
+        tokenStream.reserve(32);
+
+        if (auto firstToken = readToken())
+        {
+            tokenStream.append(firstToken);
+
+            while (auto childToken = readIfCloser(firstToken))
+            {
+                tokenStream.append(childToken);
+            }
+        }
+        return tokenStream.toBuffer();
+    }
+
+    auto readFragment()
+    {
+        auto fragmentStart = inputBuffer.savePosition();;
+        if (auto firstToken = readToken())
+        {
+            while (auto childToken = readIfCloser(firstToken))
+            {
+                // do nothing.
+            }
+        }
+        return VLBUFFER{ inputBuffer.diffPosition(fragmentStart) };
+    }
+
+    explicit operator bool() { return inputBuffer.length() > 0; }
 };
 
 #include "Dict.h"

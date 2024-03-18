@@ -15,6 +15,7 @@ struct IOBUF
     {
         NEW(dataStream, data, size);
     }
+
     void reset(UINT64 newOffset)
     {
         dataStream.clear();
@@ -48,7 +49,6 @@ struct IOBUF_POOL
         ASSERT(dataMemoy);
 
         auto&& ioBufs = ServiceBufAlloc<IOBUF>(count);
-        //auto bufMemory = (PIOBUF)StackAlloc<SERVICE_STACK>(sizeof(IOBUF) * count);
         for (UINT32 i = 0; i < count; i++)
         {
             auto&& newBuf = ioBufs[i];
@@ -260,7 +260,7 @@ struct FILE_OPS
         return fileTime;
     }
 
-    NTSTATUS Read(HANDLE fileHandle, UINT64 fileOffset, BYTESTREAM& dataStream, IOCALLBACK& ioState)
+    NTSTATUS Read(HANDLE fileHandle, UINT64 fileOffset, BYTESTREAM& dataStream, UINT32 bytesToRead, IOCALLBACK& ioState)
     {
         auto&& overlap = *ioState.start();
 
@@ -270,7 +270,7 @@ struct FILE_OPS
             overlap.OffsetHigh = UINT32(fileOffset > 32);
         }
 
-        auto result = ::ReadFile(fileHandle, dataStream.end(), dataStream.spaceLeft(), nullptr, &overlap);
+        auto result = ::ReadFile(fileHandle, dataStream.end(), bytesToRead, nullptr, &overlap);
         if (result == 0 && GetLastError() != ERROR_IO_PENDING)
         {
             return STATUS_FILE_INVALID;
@@ -278,22 +278,10 @@ struct FILE_OPS
         return STATUS_SUCCESS;
     }
 
-    //NTSTATUS Read(HANDLE fileHandle, UINT64 fileOffset, BYTESTREAM& dataStream, LPOVERLAPPED overlap)
-    //{
-    //    if (fileOffset > 0)
-    //    {
-    //        auto&& largeInteger = *(LARGE_INTEGER*)&fileOffset;
-    //        overlap->Offset = largeInteger.LowPart;
-    //        overlap->OffsetHigh = largeInteger.HighPart;
-    //    }
-
-    //    auto result = ::ReadFile(fileHandle, dataStream.end(), dataStream.spaceLeft(), nullptr, overlap);
-    //    if (result == 0 && GetLastError() != ERROR_IO_PENDING)
-    //    {
-    //        return STATUS_FILE_INVALID;
-    //    }
-    //    return STATUS_SUCCESS;
-    //}
+    NTSTATUS Read(HANDLE fileHandle, UINT64 fileOffset, BYTESTREAM& dataStream, IOCALLBACK& ioState)
+    {
+        return Read(fileHandle, fileOffset, dataStream, dataStream.spaceLeft(), ioState);
+    }
 
     NTSTATUS Read(HANDLE fileHandle, BYTESTREAM& dataStream, IOCALLBACK& ioState)
     {
