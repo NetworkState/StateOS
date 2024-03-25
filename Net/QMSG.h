@@ -7,6 +7,7 @@
 struct QMSG_SERVICE
 {
 	constexpr static BUFFER SIGNAL_PATHID = "cf542393-b669-45f5-a798-3d898277fb52";
+	constexpr static BUFFER AUTH_PATHID = "44f74f23-37ce-46e6-95b4-b182e0a5fe93";
 
 	struct QMSG_TRANSPORT;
 	using QMSG_SESSION = QUIC_SESSION<QMSG_SERVICE, QMSG_TRANSPORT>;
@@ -208,6 +209,18 @@ struct QMSG_SERVICE
 			}
 		}
 
+		void onConnect(QMSG_SESSION& quicSession)
+		{
+			if (pathId == msgService.signalPathID)
+			{
+				msgService.onSignalConnect(quicSession);
+			}
+			else if (pathId == msgService.authPathID)
+			{
+				msgService.onAuthConnect(quicSession);
+			}
+		}
+
 		QMSG_PATH(QMSG_SERVICE& msgService, TOKEN pathId, MSGBUF_POOL& bufPool) : msgService(msgService), pathId(pathId), bufPool(bufPool) {}
 	};
 
@@ -229,6 +242,8 @@ struct QMSG_SERVICE
 		{
 			recvStreams.reserve(32);
 			transmitStreams.reserve(16);
+
+			path.onConnect(getQuicSession());
 		}
 
 		RECV_STATE& getRecvState(UINT64 streamId)
@@ -303,7 +318,7 @@ struct QMSG_SERVICE
 	};
 	constexpr static HEXSTRING CAC_TOKEN_KEY = "ef3fb8cbb0ca4aa3a85341c0dca34740";
 	constexpr static HEXSTRING CAC_TOKEN_IV = "45c008ac89a14640a707e6d95e95";
-	AES_CTR cacCipher;
+	AES_GCM cacCipher;
 
 	SCHEDULER_INFO<>& scheduler;
 	TOKEN localNodeID;
@@ -315,6 +330,7 @@ struct QMSG_SERVICE
 	QPACKET::PACKET_POOL packetPool;
 	DATASTREAM<QUIC_SOCKET, SERVICE_STACK> socketPool;
 	TOKEN signalPathID;
+	TOKEN authPathID;
 	QUIC_RETRY quicRetry;
 
 	auto&& getScheduler() { return scheduler; }
@@ -352,18 +368,39 @@ struct QMSG_SERVICE
 
 	auto&& signalPath()
 	{
+		ASSERT(pathTable.count() > 0);
 		return pathTable.at(0);
 	}
 
-	QMSG_PATH& findPath(TOKEN pathId, UINT32 bufSize = 4096)
+	QMSG_PATH* findPath(TOKEN pathId)
 	{
 		for (auto&& path : pathTable.toRWBuffer())
 		{
 			if (path.pathId == pathId)
 			{
-				return path;
+				return &path;
 			}
 		}
+		return nullptr;
+	}
+
+	auto findPath(const U128& pathId)
+	{
+		QMSG_PATH* result = nullptr;
+		if (auto pathToken = ServiceTokens.findID(pathId))
+		{
+			result = findPath(pathToken);
+		}
+		return result;
+	}
+
+	QMSG_PATH& createPath(TOKEN pathId, UINT32 bufSize = 4096)
+	{
+		if (auto existingPath = findPath(pathId))
+		{
+			return *existingPath;
+		}
+
 		auto&& bufPool = getBufPool(bufSize);
 		auto&& newPath = pathTable.append(*this, pathId, bufPool);
 		return newPath;
@@ -425,46 +462,95 @@ struct QMSG_SERVICE
 		auto msg = msgBufs.readBytes(msgBufs.chainBytes());
 	}
 
+	void onSignalConnect(QMSG_SESSION& quicSession)
+	{
+
+	}
+
+	void onAuthConnect(QMSG_SESSION& quicSession)
+	{
+		if (!SystemService().AKsignKey)
+		{
+
+		}
+	}
 	void generateToken(BYTESTREAM& packetStream, BUFFER sourceCID, BUFFER destCID, BUFFER hostname)
 	{
 		auto&& tlsCert = SystemService().AKsignKey;
-		ASSERT(tlsCert.certBytes);
-		auto&& start = packetStream.mark();
+		if (tlsCert)
+		{
+			ASSERT(tlsCert.certBytes);
+			auto&& start = packetStream.mark();
 
-		auto signData = WriteMany(sourceCID, destCID, hostname);
-		tlsCert.signData(signData, packetStream.commitTo(ECDSA_SIGN_LENGTH));
-		packetStream.writeBytes(tlsCert.certBytes);
+			auto signData = WriteMany(sourceCID, destCID, hostname);
+			tlsCert.signData(signData, packetStream.commitTo(ECDSA_SIGN_LENGTH));
+			packetStream.writeBytes(tlsCert.certBytes);
 
-		auto&& tokenData = packetStream.toRWBuffer(start);
-		cacCipher.encrypt(tokenData);
+			auto&& tokenData = packetStream.toRWBuffer(start);
+
+			U128 tag; cacCipher.encrypt(destCID, tokenData, tag);
+
+			packetStream.writeBytes(tag);
+		}
 	}
 
-	bool acceptConnction(QUIC_SOCKET& udpSocket, QPACKET& recvPacket)
+	BUFFER isCACtoken(BUFFER recvToken, BUFFER destCID)
 	{
-		auto result = false;
+		auto recvTag = recvToken.shrink(AES_TAG_LENGTH);
+		BUFFER gacToken = cacCipher.decrypt(destCID, recvToken.toRWBuffer(), recvTag);
+		return gacToken;
+	}
+
+	QMSG_PATH* validateCACtoken(BUFFER gacToken, QUIC_HEADER& quicHeader)
+	{
+		QMSG_PATH* result = nullptr;
+		auto pathId = gacToken.readU128();
+
+		auto signHash = Sha256TempHash(WriteMany(quicHeader.sourceCID, quicHeader.destinationCID, NameToString(SystemService().hostname)));
+		auto signature = gacToken.readBytes(ECDSA_SIGN_LENGTH);
+
+		X509_SUBJECT subjectInfo;
+		auto isValid = SystemService().CAsignKey.verifySignature(gacToken, subjectInfo);
+		if (isValid && ecdsa_verify(subjectInfo.publicKey, signHash, signature))
+		{
+			result = findPath(pathId);
+		}
+		return result;
+	}
+
+	void acceptConnction(QUIC_SOCKET& udpSocket, QPACKET& recvPacket)
+	{
 		auto&& quicHeader = recvPacket.recvHeader;
 
 		QMSG_SESSION* newSession = nullptr;
-		auto&& tokenData = ByteStream(1024).writeBytesTo(quicHeader.recvToken);
-		ASSERT(tokenData);
+		if (auto gacToken = isCACtoken(quicHeader.recvToken, quicHeader.destinationCID))
+		{
+			auto pathId = gacToken.readU128();
+			if (auto msgPath = findPath(pathId))
+			{
+				auto signHash = Sha256TempHash(WriteMany(quicHeader.sourceCID, quicHeader.destinationCID, NameToString(SystemService().hostname)));
+				auto signature = gacToken.readBytes(ECDSA_SIGN_LENGTH);
 
-		cacCipher.encrypt(tokenData.toRWBuffer());
-		
-		SHA256_DATA signHash; Sha256ComputeHash(signHash, WriteMany(quicHeader.sourceCID, quicHeader.destinationCID, NameToString(SystemService().hostname)));
-		auto signature = tokenData.readBytes(ECDSA_SIGN_LENGTH);
-
-		X509_SUBJECT subjectInfo;
-		auto isValid = SystemService().CAsignKey.verifySignature(tokenData, subjectInfo);
-
-		isValid = isValid && ecdsa_verify(subjectInfo.publicKey, signHash, signature);
-		if (isValid)
+				X509_SUBJECT subjectInfo;
+				auto isValid = SystemService().CAsignKey.verifySignature(gacToken, subjectInfo);
+				if (isValid && ecdsa_verify(subjectInfo.publicKey, signHash, signature))
+				{
+					auto&& acceptSession = createSession(udpSocket, signalPath(), true);
+					acceptSession.appSession.remoteNodeId = ServiceTokens.createID(subjectInfo.keyId.readU128());
+					acceptSession.accept(recvPacket);
+				}
+			}
+		}
+		else if (quicRetry.validateToken(recvPacket, quicHeader))
 		{
 			auto&& acceptSession = createSession(udpSocket, signalPath(), true);
-			acceptSession.appSession.remoteNodeId = ServiceTokens.createID(subjectInfo.keyId.readU128());
 			acceptSession.accept(recvPacket);
-			result = true;
 		}
-		return result;
+		else if (quicHeader.recvToken.length() == 0)
+		{
+			quicRetry.sendRetryPacket(udpSocket.socketHandle, recvPacket, quicHeader);
+		}
+		else DBGBREAK();
 	}
 
 	void onSocketReceive(QUIC_SOCKET& udpSocket, QPACKET& recvPacket)
@@ -491,7 +577,7 @@ struct QMSG_SERVICE
 		udpSocket.beginReceive();
 	}
 
-	void doConnect(BUFFER hostname, UINT16 port)
+	void doConnect(TOKEN pathToken, BUFFER hostname, UINT16 port)
 	{
 		TOKEN hostnameToken = CreateServiceName(hostname, false);
 		auto&& udpSocket = createSocket();
@@ -499,12 +585,13 @@ struct QMSG_SERVICE
 			{
 				auto&& udpSocket = *(QUIC_SOCKET*)context;
 				auto hostname = argv.read<TOKEN>(0);
+				auto path = argv.read<TOKEN>(1);
 				auto&& service = udpSocket.service;
 
 				if (NT_SUCCESS(status))
 				{
-					auto&& msgPath = service.findPath(service.signalPathID);
-					auto&& quicSession = service.createSession(udpSocket, service.signalPath(), false);
+					auto&& msgPath = service.createPath(path);
+					auto&& quicSession = service.createSession(udpSocket, msgPath, false);
 					quicSession.doConnect(hostname);
 					udpSocket.beginReceive();
 				}
@@ -512,8 +599,9 @@ struct QMSG_SERVICE
 				{
 					udpSocket.close();
 				}
-			}, &udpSocket, hostnameToken);
+			}, &udpSocket, hostnameToken, pathToken);
 	}
+
 	void onStopSending(UINT64 streamId, UINT64 errorCode)
 	{
 		// peer app is no longer willing to receive data
@@ -567,17 +655,23 @@ struct QMSG_SERVICE
 
 	void start()
 	{
-		//labelStore.init();
-
 		cacCipher.init(CAC_TOKEN_KEY, CAC_TOKEN_IV);
 		signalPathID = ServiceTokens.createID(SIGNAL_PATHID);
+		authPathID = ServiceTokens.createID(AUTH_PATHID);
 
 		packetPool.init();
 		intMsgBufPool();
+
 		pathTable.reserve(64);
 		pathTable.append(*this, signalPathID, getBufPool(SIGNAL_MSGBUF_SIZE));
+		pathTable.append(*this, authPathID, getBufPool(SIGNAL_MSGBUF_SIZE));
 
 		startServer(TLS_PORT);
+
+		if (!SystemService().isCA())
+		{
+			doConnect(authPathID, "mathya-43", TLS_PORT);
+		}
 	}
 
 	void testLabels()

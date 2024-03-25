@@ -523,6 +523,8 @@ struct X509_OPS
                             LogInfo("keyUsage");
                             ASSERT(value.tag == ASN_BITSTRING);
                             status.keyUsage = value.data.peek();
+                            ASSERT(value.data.length() <= 4);
+                            status.keyUsage <<= (8 * (4 - value.data.length()));
                         }
                         else if (name.data == OID_id_ce_CRLDistributionPoints)
                         {
@@ -802,9 +804,9 @@ struct X509_KEY
 
     void close()
     {
-        signHandle = 0;
-        signPublicKey = NULL_BUFFER;
-        //RtlZeroMemory(signPublicKey, sizeof(signPublicKey));
+        certBytes = NULL_BUFFER;
+        //signHandle = 0;
+        //signPublicKey = NULL_BUFFER;
     }
 
     BUFFER signHash(BUFFER inputHash, BYTESTREAM&& signature)
@@ -842,7 +844,7 @@ struct X509_KEY
         return newCertBytes;
     }
 
-    explicit operator bool() const { return signHandle != 0; }
+    explicit operator bool() const { return !!certBytes; }
 };
 
 struct NODEID_PUBLICKEY_MAP
@@ -877,12 +879,15 @@ struct X509_CA
         auto result = false;
         if (auto&& parts = X509_PARTS(certBytes))
         {
+            ASSERT(parts.status.keyUsage & KEYUSAGE_KEY_CERTSIGN);
             auto&& subject = parts.subject;
             if (ecdsa_verify(signKey.signPublicKey, parts.tbsHash, parts.signature)) // self-signed
             {
                 caAuthority.keyId = subject.keyId;
                 caAuthority.name = subject.name;
                 isCA = true;
+
+                signKey.certBytes = GlobalStack().blobStream.writeBytesTo(certBytes);
 
                 knownCAs.append(subject.keyId, subject.publicKey);
                 result = true;

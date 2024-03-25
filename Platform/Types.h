@@ -283,11 +283,11 @@ constexpr UINT64 TOKEN_FLAG_MASK = BITFIELD(4, 4);
 struct TOKEN
 {
     UINT64 token;
-    constexpr static UINT64 IS_64BIT = BIT64(63);
+    //constexpr static UINT64 IS_64BIT = BIT64(63);
     constexpr static UINT64 VALUE32_MASK = BITFIELD(24, 8);
     constexpr static UINT64 VALUE64_MASK = BITFIELD(48, 8);
 
-    constexpr bool is64bit() const { return bool(token & IS_64BIT); }
+    //constexpr bool is64bit() const { return bool(token & IS_64BIT); }
 
     constexpr TOKEN() : TOKEN(TOKEN_TERROR, TOKEN_NOFLAGS, 0) {}
 
@@ -297,21 +297,21 @@ struct TOKEN
 
     constexpr TOKEN(const TOKENTYPE type, const TOKENFLAGS flags, UINT32 value) : token((value << 8) | UINT8(type) | (UINT8(flags) << 4)) { ASSERT((value >> 24) == 0); }
     constexpr TOKEN(const TOKENTYPE type, const TOKENFLAGS flags, int value) : TOKEN(type, flags, UINT32(value)) {}
-    constexpr TOKEN(const TOKENTYPE type, const TOKENFLAGS flags, const UINT64 value) : token((value << 8) | UINT8(type) | (UINT8(flags) << 4) | IS_64BIT) { ASSERT((value >> 48) == 0); }
+    constexpr TOKEN(const TOKENTYPE type, const TOKENFLAGS flags, const UINT64 value) : token((value << 8) | UINT8(type) | (UINT8(flags) << 4)) { ASSERT((value >> 48) == 0); }
 
     constexpr TOKEN(const UINT32 pattern) : token(pattern) {}
-    constexpr TOKEN(const UINT64 pattern) : token(pattern | IS_64BIT) { ASSERT((pattern >> 48) == 0); }
+    constexpr TOKEN(const UINT64 pattern) : token(pattern) { ASSERT((pattern >> 48) == 0); }
 
     constexpr TOKENTYPE getType() const { return (TOKENTYPE)UINT8(token & 0x0F); }
     constexpr TOKENFLAGS getFlags() const { return (TOKENFLAGS)getFlagBits(); }
     constexpr UINT8 getFlagBits() const { return UINT8((token & 0xF0) >> 4); }
 
-    constexpr UINT32 getValue() const { ASSERT(is64bit() == false); return UINT32((token & VALUE32_MASK) >> 8); }
-    constexpr UINT64 getValue64() const { ASSERT(is64bit()); return (token & VALUE64_MASK) >> 8; }
-    void setValue(UINT32 newValue) { ASSERT(!is64bit()); token = (newValue << 8) | UINT8(token); }
+    constexpr UINT32 getValue() const { ASSERT((token >> 32) == 0); return UINT32((token & VALUE32_MASK) >> 8); }
+    constexpr UINT64 getValue64() const { return (token & VALUE64_MASK) >> 8; }
+    void setValue(UINT32 newValue) { token = (newValue << 8) | UINT8(token); }
 
-    constexpr UINT32 toUInt32() const { ASSERT(is64bit() == false); return UINT32(token); }
-    constexpr UINT64 toUInt64() const { ASSERT(is64bit()); return token & ~IS_64BIT; }
+    constexpr UINT32 toUInt32() const { ASSERT((token >> 32) == 0); return UINT32(token); }
+    constexpr UINT64 toUInt64() const { return token; }
 
     TOKEN toToken32() { return TOKEN(UINT32(toUInt64())); }
 
@@ -364,6 +364,8 @@ struct TOKEN
     }
 
     constexpr TOKENFLAGS getStackType() { return TOKENFLAGS(token & 0x70); }
+
+    bool isGlobalName() { return isName() && getStackType() == TF_GLOBAL; }
 };
 
 constexpr auto Undefined = TOKEN(TOKEN_TERROR, 0x01);
@@ -741,7 +743,8 @@ template <typename T>
 inline STREAM_READER<T> ServiceBufAlloc(UINT32 count, auto&& ... args)
 {
     DATASTREAM<T, SERVICE_STACK> dataStream;
-    return dataStream.commit(count).toRWBuffer();
+    dataStream.commit(count);
+    return dataStream.toRWBuffer();
 }
 
 extern TOKEN CreateName(BUFFER nameString, bool caseSensitive = true);
@@ -917,6 +920,7 @@ struct VLTOKEN
         ASSERT(bits <= 8);
         UINT8 result = UINT8(value & MASK(bits));
         value >>= bits;
+        return result;
     }
 
     static void writeToken(BYTESTREAM& dataStream, TOKEN token, BUFFER tokenData = NULL_BUFFER)
@@ -935,8 +939,7 @@ struct VLTOKEN
         else if (tokenType == TOKEN_BLOB)
         {
             ASSERT(tokenData);
-            dataStream.writeVInt(token.toUInt64());
-            dataStream.writeVInt(tokenData.length());
+            dataStream.writeVInt((tokenData.length() << 4) | UINT32(TOKEN_BLOB));
             dataStream.writeBytes(tokenData);
         }
         else if (tokenType == TOKEN_KEYDATA)
@@ -949,6 +952,15 @@ struct VLTOKEN
         else if (tokenType == TOKEN_LABEL)
         {
             dataStream.writeVInt(token.toUInt64());
+        }
+        else if (tokenType == TOKEN_NAME)
+        {
+            ASSERT(token.isGlobalName());
+            dataStream.writeVInt(token.toUInt32());
+        }
+        else if (tokenType == TOKEN_INLINE_NAME)
+        {
+            dataStream.writeVInt(token.toUInt32());
         }
         else DBGBREAK();
     }
@@ -975,7 +987,7 @@ struct VLTOKEN
         if (label) writeToken(dataStream, label);
     }
 
-    void parseToken(BUFFER inputData, TOKEN& token, BUFFER& tokenData)
+    void parseToken(BUFFER& inputData, TOKEN& token, BUFFER& tokenData)
     {
         token = TOKEN(inputData.readVInt());
 
@@ -991,7 +1003,8 @@ struct VLTOKEN
         }
         else if (tokenType == TOKEN_BLOB)
         {
-            tokenData = inputData.readVData();
+            auto length = token.toUInt32() >> 4;
+            tokenData = inputData.readBytes(length);
         }
     }
 
@@ -1048,6 +1061,8 @@ struct VISUAL_DYANMIC
     }
 };
 
+constexpr VISUAL_DYANMIC StructDynamic{ VI_INVISIBLE, VS_BLOCK };
+
 template <typename STACK = SCHEDULER_STACK>
 struct VLSTREAM
 {
@@ -1078,6 +1093,16 @@ struct VLSTREAM
         currentDynamic = dynamic;
 
         VLToken.write(dataStream, contour, contourData, label, separation, visibility);
+    }
+
+    void write(TOKEN contour, BUFFER contourData = NULL_BUFFER, TOKEN label = Null)
+    {
+        VLToken.write(dataStream, contour, contourData, label, VS_REPEAT, VI_REPEAT);
+    }
+
+    void write(BUFFER contourData, TOKEN label = Null)
+    {
+        VLToken.write(dataStream, Blob, contourData, label, VS_REPEAT, VI_REPEAT);
     }
 
     void insert(BUFFER data, UINT32 offset = 0)

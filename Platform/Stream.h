@@ -792,12 +792,12 @@ struct TBYTESTREAM
 	}
 
 	TBYTESTREAM(TBYTESTREAM&& other) { reset(other.address(), other.size()); }
-	TBYTESTREAM(U96& value) : TBYTESTREAM(value.u8) {} // { setAddress(value.u8, sizeof(value.u8)); }
-	TBYTESTREAM(U128& value) : TBYTESTREAM(value.u8) {} //  { setAddress(value.u8, sizeof(value.u8)); }
-	TBYTESTREAM(U256& value) : TBYTESTREAM(value.u8) {} //  { setAddress(value.u8, sizeof(value.u8)); }
-	TBYTESTREAM(U256&& value) : TBYTESTREAM(value.u8) {} //  { setAddress(value.u8, sizeof(value.u8)); }
-	TBYTESTREAM(U512& value) : TBYTESTREAM(value.u8) {} //  { setAddress(value.u8, sizeof(value.u8)); }
-	TBYTESTREAM(U1024& value) : TBYTESTREAM(value.u8) {} //  { setAddress(value.u8, sizeof(value.u8)); }
+	TBYTESTREAM(U96& value) : TBYTESTREAM(value.u8) {}
+	TBYTESTREAM(U128& value) : TBYTESTREAM(value.u8) {}
+	TBYTESTREAM(U256& value) : TBYTESTREAM(value.u8) {}
+	TBYTESTREAM(U256&& value) : TBYTESTREAM(value.u8) {}
+	TBYTESTREAM(U512& value) : TBYTESTREAM(value.u8) {}
+	TBYTESTREAM(U1024& value) : TBYTESTREAM(value.u8) {}
 
 	void fromBuffer(BUFFER otherData)
 	{
@@ -1153,6 +1153,11 @@ struct TBYTESTREAM
 	void writeInt(V value)
 	{
 		*(V*)commit(sizeof(value)) = value;
+	}
+
+	void writeU16(UINT16 value)
+	{
+		writeInt(value);
 	}
 
 	template <typename V>
@@ -1592,13 +1597,6 @@ struct TBYTESTREAM
 	{
 		return _tail > 0;
 	}
-
-	//TBYTESTREAM& operator = (const TBYTESTREAM&& other) 
-	//{ 
-	//	ASSERT(other.count() == 0); 
-	//	setAddress(other.end(), other.spaceLeft()); 
-	//	return *this; 
-	//}
 };
 
 using BYTESTREAM = TBYTESTREAM<>;
@@ -1677,14 +1675,15 @@ struct DATASTREAM
 		return *this;
 	}
 
-	DATASTREAM<T, THREAD_STACK> commit(UINT32 count, auto&& ... args)
+	T& commit(UINT32 count, auto&& ... args)
 	{
-		auto addr = end();
+		auto position = _tail;
+		reserve(count);
 		for (UINT32 i = 0; i < count; i++)
 		{
 			append(args ...);
 		}
-		return { addr, count };
+		return at(position);
 	}
 
 	T& insert(UINT32 position, UINT32 count = 1)

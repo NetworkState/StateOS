@@ -307,7 +307,7 @@ struct TOKEN_OPS
         return STACK::GetCurrent().idTokens.findID(id);
     }
 
-    TOKEN createID(U128& id)
+    TOKEN createID(const U128& id)
     {
         return STACK::GetCurrent().idTokens.createID(id);
     }

@@ -763,6 +763,13 @@ struct AES_CTR
         setKey(keyBytes);
         setSalt(saltBytes);
     }
+
+    void init(BUFFER key)
+    {
+        ASSERT(key.length() >= 32);
+        setKey(key.readBytes(16));
+        setSalt(key.readBytes(16));
+    }
 };
 
 struct GCM_CTR
@@ -998,7 +1005,6 @@ struct AES_GCM
     GCM_CTR aes;
     AES_GMAC gmac;
     AES_GCM_IV salt;
-    U128 encryptTag;
 
     auto saltStream() { return BYTESTREAM(salt.u8, AES_GCM_IV_LENGTH); }
 
@@ -1035,17 +1041,11 @@ struct AES_GCM
         iv.u32[2] ^= salt.u32[2];
     }
 
-    void encrypt(AES_GCM_IV& iv, BUFFER aad, RWBUFFER text, U128& tag)
+    void encrypt(AES_GCM_IV iv, BUFFER aad, RWBUFFER text, U128& tag)
     {
         mergeSalt(iv);
         aes.setIV(iv);
         encrypt(aad, text, tag);
-    }
-
-    BUFFER encrypt(AES_GCM_IV& iv, BUFFER aad, RWBUFFER text)
-    {
-        encrypt(iv, aad, text, encryptTag);
-        return BUFFER{ encryptTag };
     }
 
     VARGS(BUFFER)
@@ -1064,34 +1064,33 @@ struct AES_GCM
     BUFFER decrypt(BUFFER aad, RWBUFFER cipherText, BUFFER receivedTag)
     {
         ASSERT(aes.Y0);
-        auto decryptBuffer = NULL_BUFFER;
+        auto plainText = NULL_BUFFER;
 
         U128 computedTag;
         gmac.update(aad, cipherText.toBuffer());
         gmac.finalize(aes.EK0, computedTag);
 
-        auto tagMatch = RtlCompareMemory(computedTag.u8, receivedTag.data(), AES_TAG_LENGTH) == AES_TAG_LENGTH;
-        if (tagMatch)
+        if (BUFFER(computedTag) == receivedTag)
         {
             aes.encrypt(cipherText); // in CTR mode encrypt/decrypt is just XOR
-            decryptBuffer = cipherText.toBuffer(); 
+            plainText = cipherText.toBuffer(); 
         }
         else DBGBREAK();
 
-        return decryptBuffer;
+        return plainText;
     }
 
-    BUFFER decrypt(AES_GCM_IV& iv, BUFFER aad, RWBUFFER cipherText)
-    {
-        auto tag = cipherText.shrink(AES_TAG_LENGTH).toBuffer();
-        return decrypt(iv, aad, cipherText, tag);
-    }
-
-    BUFFER decrypt(AES_GCM_IV& iv, BUFFER aad, RWBUFFER text, BUFFER tag)
+    BUFFER decrypt(AES_GCM_IV iv, BUFFER aad, RWBUFFER text, BUFFER tag)
     {
         mergeSalt(iv);
         aes.setIV(iv);
         return decrypt(aad, text, tag);
+    }
+
+    BUFFER decrypt(AES_GCM_IV iv, BUFFER aad, RWBUFFER cipherText)
+    {
+        auto tag = cipherText.shrink(AES_TAG_LENGTH).toBuffer();
+        return decrypt(iv, aad, cipherText, tag);
     }
 };
 

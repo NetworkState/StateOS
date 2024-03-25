@@ -3218,6 +3218,21 @@ constexpr PREFIX_VALUE NameStrings[] = {
     { "MIME", "application/yang" },
 
     { "QMSG", "signed-message" },
+    { "QMSG", "sign-ak-req" },
+    { "QMSG", "sign-ak-resp" },
+    { "QMSG", "auth-req" },
+    { "QMSG", "auth-resp" },
+    { "QMSG", "ek-cert" },
+    { "QMSG", "ak-cert" },
+    { "QMSG", "ak-csr" },
+    { "QMSG", "ek-public" },
+    { "QMSG", "ak-public" },
+    { "QMSG", "cred-digest" },
+    { "QMSG", "cred-secret" },
+    { "QMSG", "attestation-report" },
+    { "QMSG", "tcg-log" },
+    { "QMSG", "tcg-quote" },
+
 };
 
 

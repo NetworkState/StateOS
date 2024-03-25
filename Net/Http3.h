@@ -925,10 +925,9 @@ struct H3_SERVICE
             {
                 ASSERT(session == nullptr);
 
-                auto retryData = quicRetry.generateRetryToken(recvPacket, quicHeader);
-                if (quicHeader.recvToken)
+                if (BUFFER recvToken = quicHeader.recvToken)
                 {
-                    BUFFER recvToken = quicHeader.recvToken;
+                    auto retryData = quicRetry.generateRetryToken(recvPacket, quicHeader);
                     if ((quicHeader.destinationCID == retryData.readBytes(RETRY_CID_LENGTH)) &&
                         (recvToken.readBytes(RETRY_TOKEN_DIGEST_SIZE) == retryData.readBytes(RETRY_TOKEN_DIGEST_SIZE)))
                     {
@@ -954,7 +953,7 @@ struct H3_SERVICE
 
     void generateToken(BYTESTREAM& packetStream, BUFFER sourceCID, BUFFER destCID, BUFFER hostname)
     {
-
+        // no-op
     }
 
     void onStopSending(UINT64 streamId, UINT64 errorCode)

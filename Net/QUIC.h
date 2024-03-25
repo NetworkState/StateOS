@@ -351,9 +351,8 @@ struct QUIC_RETRY
         auto cidTokenBytes = tokenData.readBytes(RETRY_CID_LENGTH + RETRY_TOKEN_DIGEST_SIZE + recvHeader.destinationCID.length());
         sendStream.writeBytes(cidTokenBytes);
 
-        U128 tag;
-        retryCipher.hash(tag, virtualHeader.toBuffer(), sendStream.toBuffer());
-        sendStream.writeBytes(tag.u8);
+        auto tag = retryCipher.hash(virtualHeader.toBuffer(), sendStream.toBuffer());
+        sendStream.writeBytes(tag);
 
         WSABUF sendBuf{ sendStream.count(), (CHAR*)sendStream.address() };
         DWORD bytesSent;
@@ -373,11 +372,11 @@ struct QUIC_RETRY
         auto recvData = packet.frameStream.toBuffer();
         auto recvTag = recvData.shrink(AES_TAG_LENGTH);
 
-        U128 tag;
-        retryCipher.hash(tag, virtualHeader.toBuffer(), recvData);
+        auto tag = retryCipher.hash(virtualHeader.toBuffer(), recvData);
 
-        auto match = RtlCompareMemory(tag.u8, recvTag.data(), 16);
-        ASSERT(match == 16);
+        ASSERT(BUFFER(tag) == recvTag);
+        //auto match = RtlCompareMemory(tag.u8, recvTag.data(), 16);
+        //ASSERT(match == 16);
 
         packet.headerStream.fromBuffer(recvData.readBytes((UINT32)packet.recvHeader.headerLength));
         packet.frameStream.fromBuffer(recvData);
@@ -407,9 +406,9 @@ struct QUIC_RETRY
     bool validateToken(QPACKET& recvPacket, QUIC_HEADER& quicHeader)
     {
         auto result = false;
-        auto retryData = generateRetryToken(recvPacket, quicHeader);
         if (quicHeader.recvToken)
         {
+            auto retryData = generateRetryToken(recvPacket, quicHeader);
             BUFFER recvToken = quicHeader.recvToken;
             if ((quicHeader.destinationCID == retryData.readBytes(RETRY_CID_LENGTH)) &&
                 (recvToken.readBytes(RETRY_TOKEN_DIGEST_SIZE) == retryData.readBytes(RETRY_TOKEN_DIGEST_SIZE)))
@@ -458,7 +457,7 @@ struct QUIC_SESSION
             key = kdf.deriveKey(clientSecret, "quic hp", NULL_BUFFER, ByteStream(keySize));
             isServer ? headerRecvKey.setKey(key) : headerSendKey.setKey(key);
 
-            kdf.deriveKey(clientSecret, "quic iv", NULL_BUFFER, BYTESTREAM(isServer ? recvKey.salt : sendKey.salt));
+            kdf.deriveKey(clientSecret, "quic iv", NULL_BUFFER, isServer ? recvKey.salt : sendKey.salt);
 
             key = kdf.deriveKey(serverSecret, "quic key", NULL_BUFFER, ByteStream(keySize));
             isServer ? sendKey.setKey(key) : recvKey.setKey(key);
@@ -466,7 +465,7 @@ struct QUIC_SESSION
             key = kdf.deriveKey(serverSecret, "quic hp", NULL_BUFFER, ByteStream(keySize));
             isServer ? headerSendKey.setKey(key) : headerRecvKey.setKey(key);
 
-            kdf.deriveKey(serverSecret, "quic iv", NULL_BUFFER, BYTESTREAM(isServer ? sendKey.salt : recvKey.salt));
+            kdf.deriveKey(serverSecret, "quic iv", NULL_BUFFER, isServer ? sendKey.salt : recvKey.salt);
         }
 
         void updateKeys(HKDF& kdf, bool isServer, BUFFER clientSecret, BUFFER serverSecret, UINT32 keySize)
@@ -476,12 +475,12 @@ struct QUIC_SESSION
             auto key = kdf.deriveKey(clientSecret, "quic key", NULL_BUFFER, ByteStream(keySize));
             isServer ? recvKey.setKey(key) : sendKey.setKey(key);
 
-            kdf.deriveKey(clientSecret, "quic iv", NULL_BUFFER, BYTESTREAM(isServer ? recvKey.salt : sendKey.salt));
+            kdf.deriveKey(clientSecret, "quic iv", NULL_BUFFER, isServer ? recvKey.salt : sendKey.salt);
 
             key = kdf.deriveKey(serverSecret, "quic key", NULL_BUFFER, ByteStream(keySize));
             isServer ? sendKey.setKey(key) : recvKey.setKey(key);
 
-            kdf.deriveKey(serverSecret, "quic iv", NULL_BUFFER, BYTESTREAM(isServer ? sendKey.salt : recvKey.salt));
+            kdf.deriveKey(serverSecret, "quic iv", NULL_BUFFER, isServer ? sendKey.salt : recvKey.salt);
         }
 
         void encrypt(QPACKET& sendBuf)

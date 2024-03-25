@@ -70,6 +70,8 @@ struct TPMOPS
             defineCounter(TPM_COUNTER_NODE_ID, existingIndexes);
             defineCounter(TPM_COUNTER_ROLE_ID, existingIndexes);
 
+            getHandles(TPM2_HR_NV_INDEX, -1);
+
             getCertificate();
 
             EKauthSession = getEndorsementAuth();
@@ -241,6 +243,18 @@ struct TPMOPS
 
         //TPMS_AUTH_COMMAND
         request.beWriteU32(handle2);
+        request.beWriteU16(0); // nonce
+        request.writeByte(1); // attr
+        request.beWriteU16(0);
+
+        offset.writeLength(0);
+    }
+
+    void setAuth(BYTESTREAM& request, TPM_HANDLE handle1)
+    {
+        auto offset = request.saveOffset(4);
+        //TPMS_AUTH_COMMAND
+        request.beWriteU32(handle1);
         request.beWriteU16(0); // nonce
         request.writeByte(1); // attr
         request.beWriteU16(0);
@@ -462,8 +476,9 @@ struct TPMOPS
     inline void writeHandle(BYTESTREAM& outStream, UINT32 handle) { outStream.beWriteU32(handle); }
     inline void writeAlg(BYTESTREAM& outStream, UINT16 alg = TPM2_ALG_NULL) { outStream.beWriteU16(alg); }
 
-    BUFFER parsePublicData(BUFFER data, BYTESTREAM&& keyStream)
+    BUFFER parsePublicData(BUFFER data, auto&& keyStream)
     {
+        auto start = keyStream.mark();
         auto type = data.beReadU16();
 
         auto nameAlg = data.beReadU16();
@@ -505,7 +520,7 @@ struct TPMOPS
             keyStream.writeBytes(pointY);
 
             ASSERT(data.length() == 0);
-            return keyStream.toBuffer();
+            return keyStream.toBuffer(start);
         }
         else if (type == TPM2_ALG_RSA)
         {
@@ -521,7 +536,7 @@ struct TPMOPS
 
             auto key = data.readBytes(keyBytes);
             keyStream.writeBytes(key);
-            return keyStream.toBuffer();
+            return keyStream.toBuffer(start);
         }
         else DBGBREAK();
         return NULL_BUFFER;
@@ -596,7 +611,7 @@ struct TPMOPS
             auto responseBytes = response.beReadU32();
 
             auto publicData = readTPM2B(response);
-            parsePublicData(publicData, EKpublicKeyEC);
+            parsePublicData(publicData, BYTESTREAM(EKpublicKeyEC));
         }
         return handle;
     }
@@ -671,18 +686,18 @@ struct TPMOPS
         }
     }
 
-    BUFFER getPCRdigest(SHA256_DATA& digestHash)
+    BUFFER getPCRdigest(SHA256_DATA& digestHash, UINT16 pcr = 0x0880)
     {
         BUFFER result;
-        auto response = submitCommand(TPM2_CC_PCR_Read, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request)
+        auto response = submitCommand(TPM2_CC_PCR_Read, TPM2_ST_NO_SESSIONS, [](BYTESTREAM& request, UINT16 pcr)
             {
+                //TPML_PCR_SELECTION
                 request.beWriteU32(1);
                 request.beWriteU16(TPM2_ALG_SHA256);
                 request.writeByte(3);
-                request.writeByte(0x80); // get PCRS 7 and 11 (0x80, 0x08)
-                request.writeByte(0x08);
+                request.writeU16(pcr);
                 request.writeByte(0);
-            });
+            }, pcr);
 
         if (response)
         {
@@ -717,12 +732,13 @@ struct TPMOPS
 
     BUFFER parseAttest(BUFFER attestData)
     {
+        BUFFER digest;
+
         //TPMS_ATTEST
         auto magic = attestData.beReadU32();
         ASSERT(magic == TPM2_GENERATED_VALUE);
 
         auto attestType = attestData.beReadU16();
-        ASSERT(attestType == TPM2_ST_ATTEST_QUOTE);
 
         auto signer = readTPM2B(attestData);
 
@@ -735,50 +751,57 @@ struct TPMOPS
 
         auto firmwareVersion = attestData.beReadU64();
 
-        auto pcrSets = attestData.beReadU32();
-        ASSERT(pcrSets == 1);
+        if (attestType == TPM2_ST_ATTEST_QUOTE)
+        {
+            auto pcrSets = attestData.beReadU32();
+            ASSERT(pcrSets == 1);
 
-        auto hashAlg = attestData.beReadU16();
-        ASSERT(hashAlg == TPM2_ALG_SHA256);
+            auto hashAlg = attestData.beReadU16();
+            ASSERT(hashAlg == TPM2_ALG_SHA256);
 
-        auto registerCount = attestData.readByte();
-        ASSERT(registerCount    == 3);
+            auto registerCount = attestData.readByte();
+            ASSERT(registerCount == 3);
 
-        auto registe1 = attestData.readByte();
-        auto registe2 = attestData.readByte();
-        auto registe3 = attestData.readByte();
+            auto pcr = attestData.readU16();
+            attestData.readByte(); // zero
 
-        auto pcrDigest = readTPM2B(attestData);
-        return pcrDigest;
+            digest = readTPM2B(attestData);
+        }
+        else if (attestType == TPM2_ST_ATTEST_TIME)
+        {
+            // code
+        }
+        return digest;
     }
 
     constexpr static UINT32 SIGN_RSA_HANDLE = 0x81000002;
     constexpr static UINT32 ENCRYPT_RSA_HANDLE = 0x81010001;
     constexpr static UINT32 ENCRYPT_ECC_HANDLE = 0x81000009;
 
-    BUFFER getQuote(TPM_HANDLE signHandle)
+    void writePCRselect(BYTESTREAM& request, UINT16 pcr)
+    {
+        request.writeByte(3);
+        request.writeU16(pcr);
+        request.writeByte(0);
+    }
+
+    BUFFER getQuote(TPM_HANDLE signHandle, UINT16 pcrSelection = 0x0880, BUFFER context = NULL_BUFFER)
     {
         BUFFER pcrDigest;
-        auto response = submitCommand(TPM2_CC_Quote, TPM2_ST_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE signHandle)
+        auto response = submitCommand(TPM2_CC_Quote, TPM2_ST_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE signHandle, UINT16 pcr, BUFFER context)
             {
                 request.beWriteU32(signHandle);
-                //request.beWriteU32(TPM.attestationHandle); XXX
                 TPM.setPassword(request, NULL_BUFFER);
 
-                request.beWriteU16(0);
-                //request.writeBytes(context);
+                TPM.writeTPM2B(request, context);
 
-                //request.beWriteU16(TPM2_ALG_ECDSA); XXX
-                request.beWriteU16(TPM2_ALG_RSASSA);
-                request.beWriteU16(TPM2_ALG_SHA);
+                request.beWriteU16(TPM2_ALG_NULL);
 
                 request.beWriteU32(1);
                 request.beWriteU16(TPM2_ALG_SHA256);
-                request.writeByte(3);
-                request.writeByte(0x80); // get PCRS 7 and 11 (0x80, 0x08)
-                request.writeByte(0x08);
-                request.writeByte(0);
-            }, signHandle);
+
+                TPM.writePCRselect(request, pcr);
+            }, signHandle, pcrSelection, context);
         if (response)
         {
             response = getSessionResponse(response);
@@ -831,6 +854,11 @@ handle: 0x81010001 => Endorsement, RSA encrypt
         return publicData;
     }
     
+    BUFFER readPublic(TPM_HANDLE tpmHandle)
+    {
+        return readPublic(tpmHandle, BUFFER());
+    }
+
     bool activateCredential(TPM_HANDLE aikHandle, BUFFER digest, BUFFER cipherSecret, BUFFER& plainSecret)
     {
         auto result = false;
@@ -883,6 +911,8 @@ handle: 0x81010001 => Endorsement, RSA encrypt
                 cipherSecret = readTPM2B(response);
 
                 ASSERT(response.length() == 0);
+
+                result = true;
             }
             else break;
         } while (false);
@@ -1141,6 +1171,7 @@ handle: 0x81010001 => Endorsement, RSA encrypt
             }
             eventSize = log.readU32();
             eventData = log.readBytes(eventSize);
+            printf("pcr: %d, event: 0x%x, length: %d\n", pcr, eventType, eventSize);
         }
     }
 
@@ -1155,30 +1186,46 @@ handle: 0x81010001 => Endorsement, RSA encrypt
 
     }
 
+
+    BUFFER getTimeQuote(TPM_HANDLE signHandle)
+    {
+        auto response = submitCommand(TPM2_CC_GetTime, TPM2_ST_SESSIONS, [](BYTESTREAM& request, TPM_HANDLE signHandle)
+            {
+                request.beWriteU32(TPM2_RH_ENDORSEMENT);
+                request.beWriteU32(signHandle);
+
+                TPM.setAuth(request, TPM.EKauthSession, TPM2_RH_PW);
+
+                TPM.writeTPM2B(request, NULL_BUFFER);
+                request.beWriteU16(TPM2_ALG_NULL);
+            }, signHandle);
+        if (response)
+        {
+            parseAttest(readTPM2B(response));
+        }
+    }
+
     constexpr static UINT32 ECC_EKCERT_NVINDEX = 0x01C0000A;
     constexpr static UINT32 RSA_EKCERT_NVINDEX =      0x01C00002;
     constexpr static UINT32 EK_TEMPLATE_NVINDEX = 0x01c0000c;
     constexpr static UINT32 EK_NONCE_NVINDEX =    0x01c0000b;
 
-    LOCAL_STREAM<512> certPublicKey;
-
-    BUFFER EKCertECCbytes;
-    BUFFER EKCertRSAbytes;
-
-    BUFFER EKpublicKeyRSA;
+    struct
+    {
+        TPM_HANDLE tpmHandle;
+        BUFFER certBytes;
+        BUFFER publicKey;
+        BUFFER publicData;
+    } EKInfo;
 
     void getCertificate()
     {
-        auto certData = readNVIndex(ECC_EKCERT_NVINDEX);
-        EKCertECCbytes = GlobalStack().blobStream.writeBytesTo(certData);
+        EKInfo.tpmHandle = ENCRYPT_RSA_HANDLE;
 
-        certData = readNVIndex(RSA_EKCERT_NVINDEX);
-        EKCertRSAbytes = GlobalStack().blobStream.writeBytesTo(certData);
+        EKInfo.certBytes = GlobalStack().blobStream.writeBytesTo(readNVIndex(RSA_EKCERT_NVINDEX));
+        EKInfo.publicData = GlobalStack().blobStream.writeBytesTo(readPublic(ENCRYPT_RSA_HANDLE, BUFFER()));
 
-        auto publicData = readPublic(ENCRYPT_RSA_HANDLE, BUFFER());
-        auto publicKey = parsePublicData(publicData, ByteStream(512));
-
-        EKpublicKeyRSA = GlobalStack().blobStream.writeBytesTo(publicKey).rebase();
+        EKInfo.publicKey = parsePublicData(EKInfo.publicData, GlobalStack().blobStream);
     }
 
     TPM_HANDLE EKauthSession;
@@ -1217,7 +1264,7 @@ handle: 0x81010001 => Endorsement, RSA encrypt
                 request.beWriteU32(0);
 
             }, sessionHandle);
-        ASSERT(response);
+        //ASSERT(response);
         sessionHandle = response ? sessionHandle : TPM2_RH_NULL;
         return sessionHandle;
     }
@@ -1227,11 +1274,6 @@ handle: 0x81010001 => Endorsement, RSA encrypt
 
     void test()
     {
-        //defineNVSpace(0x01c00004, NULL_BUFFER);
-        //readNVpublic(0x01c0000A);
-        //undefineNV(0x01c00004);
-        //openEKhandleEC();
-        //getEndorsementAuth();
         auto found1 = getHandles(TPM2_HR_PERSISTENT, -1); // RSA_EKCERT_NVINDEX);
         //auto found2 = getHandles(TPM2_HR_NV_INDEX, EKCERT_NVINDEX);
         //auto found2 = getHandles(EK_TEMPLATE_NVINDEX);
@@ -1242,6 +1284,8 @@ handle: 0x81010001 => Endorsement, RSA encrypt
 
         AES_GCM cipher;
         getHandleInfo(ENCRYPT_RSA_HANDLE, std::move(rsaSignPublicKey.byteStream()));
+        BUFFER testMsg = "this is a test for encryptwithEK function call";
+        BUFFER cipherText;
         //getCertificate();
         //EKhandleEC = openEKhandleEC();
         getQuote(SIGN_RSA_HANDLE);
